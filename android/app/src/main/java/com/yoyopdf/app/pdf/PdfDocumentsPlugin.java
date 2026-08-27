@@ -1,0 +1,489 @@
+package com.yoyopdf.app.pdf;
+
+import android.app.Activity;
+import android.content.ClipData;
+import android.content.ContentResolver;
+import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.OpenableColumns;
+import androidx.activity.result.ActivityResult;
+import com.getcapacitor.JSArray;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
+import com.getcapacitor.annotation.CapacitorPlugin;
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
+import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.json.JSONException;
+
+@CapacitorPlugin(name = "PdfDocuments")
+public final class PdfDocumentsPlugin extends Plugin {
+    private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
+    private final AtomicBoolean mergeRunning = new AtomicBoolean(false);
+    private ExecutorService executor;
+    private PdfMergeEngine mergeEngine;
+
+    @Override
+    public void load() {
+        PDFBoxResourceLoader.init(getContext());
+        executor = Executors.newSingleThreadExecutor();
+        mergeEngine = new PdfMergeEngine();
+        cleanupOldMergeFiles();
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        cancelRequested.set(true);
+        if (executor != null) executor.shutdownNow();
+    }
+
+    @PluginMethod
+    public void pickPdfs(PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/pdf");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(call, intent, "pickPdfsResult");
+    }
+
+    @ActivityCallback
+    private void pickPdfsResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null) {
+            JSObject response = new JSObject();
+            response.put("cancelled", true);
+            response.put("files", new JSArray());
+            response.put("duplicates", 0);
+            call.resolve(response);
+            return;
+        }
+
+        Intent data = result.getData();
+        List<Uri> selectedUris = collectUris(data);
+        int duplicateCount = countDuplicates(data);
+        int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+
+        executor.execute(() -> {
+            JSArray files = new JSArray();
+            JSArray rejected = new JSArray();
+            for (Uri uri : selectedUris) {
+                takeReadPermission(uri, flags);
+                try {
+                    files.put(inspectSelectedPdf(uri));
+                } catch (PdfMergeException error) {
+                    JSObject item = new JSObject();
+                    item.put("name", queryName(uri));
+                    item.put("code", error.getCode());
+                    rejected.put(item);
+                }
+            }
+            JSObject response = new JSObject();
+            response.put("cancelled", false);
+            response.put("files", files);
+            response.put("rejected", rejected);
+            response.put("duplicates", duplicateCount);
+            call.resolve(response);
+        });
+    }
+
+    @PluginMethod
+    public void mergePdfs(PluginCall call) {
+        List<Uri> sources;
+        try {
+            sources = parseContentUris(call.getArray("uris"));
+        } catch (PdfMergeException error) {
+            call.reject(error.getMessage(), error.getCode());
+            return;
+        }
+        if (sources.size() < 2) {
+            call.reject("Choose at least two PDF files.", "TOO_FEW_FILES");
+            return;
+        }
+        if (!mergeRunning.compareAndSet(false, true)) {
+            call.reject("Another PDF operation is already running.", "BUSY");
+            return;
+        }
+
+        cancelRequested.set(false);
+        String requestedName = safeOutputName(call.getString("suggestedName", "merged-pdf.pdf"));
+        File tempFile = new File(mergeCacheDirectory(), "merge-" + UUID.randomUUID() + ".pdf");
+        call.getData().put("mergeTempPath", tempFile.getAbsolutePath());
+        call.getData().put("mergeOutputName", requestedName);
+
+        executor.execute(() -> {
+            try {
+                notifyPhase("merging", "Combining PDFs on this device.");
+                int pageCount = mergeEngine.merge(getContext(), sources, tempFile, cancelRequested, (completed, total) -> {
+                    JSObject progress = new JSObject();
+                    progress.put("phase", "merging");
+                    progress.put("completed", completed);
+                    progress.put("total", total);
+                    progress.put("message", completed + " of " + total + " PDFs combined");
+                    notifyListeners("mergeProgress", progress);
+                });
+                call.getData().put("mergePageCount", pageCount);
+                if (cancelRequested.get()) throw new PdfMergeException("CANCELLED", "The merge was cancelled.");
+                notifyPhase("awaitingSave", "Choose where to save the merged PDF.");
+                getActivity().runOnUiThread(() -> launchSavePicker(call, requestedName));
+            } catch (PdfMergeException error) {
+                finishFailedMerge(call, tempFile, error);
+            } catch (RuntimeException error) {
+                finishFailedMerge(call, tempFile, new PdfMergeException("UNEXPECTED_ERROR", "An unexpected error stopped the merge.", error));
+            }
+        });
+    }
+
+    @ActivityCallback
+    private void saveMergedPdfResult(PluginCall call, ActivityResult result) {
+        if (call == null) {
+            mergeRunning.set(false);
+            return;
+        }
+        File tempFile = new File(call.getString("mergeTempPath", ""));
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+            deleteQuietly(tempFile);
+            mergeRunning.set(false);
+            JSObject response = new JSObject();
+            response.put("cancelled", true);
+            call.resolve(response);
+            return;
+        }
+
+        Intent data = result.getData();
+        Uri outputUri = data.getData();
+        int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        takeWritePermission(outputUri, flags);
+        notifyPhase("saving", "Saving the merged PDF.");
+
+        executor.execute(() -> {
+            try {
+                copyToDocument(tempFile, outputUri);
+                DocumentInfo info = queryDocument(outputUri);
+                JSObject response = new JSObject();
+                response.put("cancelled", false);
+                response.put("uri", outputUri.toString());
+                response.put("name", info.name);
+                response.put("size", info.size);
+                response.put("pageCount", call.getInt("mergePageCount", 0));
+                response.put("createdAt", System.currentTimeMillis());
+                response.put("operation", "merge");
+                call.resolve(response);
+            } catch (SecurityException error) {
+                call.reject("The selected save location is not accessible.", "INACCESSIBLE_OUTPUT");
+            } catch (IOException error) {
+                String code = isOutOfSpace(error) ? "INSUFFICIENT_STORAGE" : "SAVE_FAILED";
+                String message = isOutOfSpace(error)
+                    ? "There is not enough free storage to save the merged PDF."
+                    : "The merged PDF could not be saved at that location.";
+                call.reject(message, code);
+            } finally {
+                deleteQuietly(tempFile);
+                cancelRequested.set(false);
+                mergeRunning.set(false);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void cancelMerge(PluginCall call) {
+        boolean requested = mergeRunning.get();
+        if (requested) cancelRequested.set(true);
+        JSObject result = new JSObject();
+        result.put("requested", requested);
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void getFileStatus(PluginCall call) {
+        Uri uri;
+        try {
+            uri = requireContentUri(call.getString("uri"));
+        } catch (PdfMergeException error) {
+            call.reject(error.getMessage(), error.getCode());
+            return;
+        }
+        executor.execute(() -> {
+            JSObject response = new JSObject();
+            try (android.content.res.AssetFileDescriptor descriptor = getContext().getContentResolver().openAssetFileDescriptor(uri, "r")) {
+                DocumentInfo info = queryDocument(uri);
+                response.put("available", descriptor != null);
+                response.put("name", info.name);
+                response.put("size", info.size);
+            } catch (Exception error) {
+                response.put("available", false);
+            }
+            call.resolve(response);
+        });
+    }
+
+    @PluginMethod
+    public void openPdf(PluginCall call) {
+        Uri uri;
+        try {
+            uri = requireContentUri(call.getString("uri"));
+            ensureDocumentAvailable(uri);
+        } catch (PdfMergeException error) {
+            call.reject(error.getMessage(), error.getCode());
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.setDataAndType(uri, "application/pdf");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.setClipData(ClipData.newUri(getContext().getContentResolver(), "YOYOPDF document", uri));
+        try {
+            getActivity().startActivity(intent);
+            call.resolve();
+        } catch (RuntimeException error) {
+            call.reject("No installed app can open this PDF.", "OPEN_UNAVAILABLE");
+        }
+    }
+
+    @PluginMethod
+    public void sharePdf(PluginCall call) {
+        Uri uri;
+        try {
+            uri = requireContentUri(call.getString("uri"));
+            ensureDocumentAvailable(uri);
+        } catch (PdfMergeException error) {
+            call.reject(error.getMessage(), error.getCode());
+            return;
+        }
+        Intent share = new Intent(Intent.ACTION_SEND);
+        share.setType("application/pdf");
+        share.putExtra(Intent.EXTRA_STREAM, uri);
+        share.setClipData(ClipData.newUri(getContext().getContentResolver(), "YOYOPDF document", uri));
+        share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            getActivity().startActivity(Intent.createChooser(share, "Share PDF"));
+            call.resolve();
+        } catch (RuntimeException error) {
+            call.reject("The Android share sheet is unavailable.", "SHARE_UNAVAILABLE");
+        }
+    }
+
+    private void launchSavePicker(PluginCall call, String requestedName) {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/pdf");
+        intent.putExtra(Intent.EXTRA_TITLE, requestedName);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try {
+            startActivityForResult(call, intent, "saveMergedPdfResult");
+        } catch (RuntimeException error) {
+            finishFailedMerge(call, new File(call.getString("mergeTempPath", "")), new PdfMergeException("SAVE_UNAVAILABLE", "No document provider is available for saving PDFs.", error));
+        }
+    }
+
+    private void copyToDocument(File source, Uri destination) throws IOException {
+        ContentResolver resolver = getContext().getContentResolver();
+        try (InputStream input = new FileInputStream(source); OutputStream output = resolver.openOutputStream(destination, "w")) {
+            if (output == null) throw new IOException("Document provider returned no output stream.");
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+            output.flush();
+        }
+    }
+
+    private JSObject inspectSelectedPdf(Uri uri) throws PdfMergeException {
+        DocumentInfo info = queryDocument(uri);
+        try (InputStream raw = getContext().getContentResolver().openInputStream(uri); BufferedInputStream input = raw == null ? null : new BufferedInputStream(raw)) {
+            if (input == null) throw new PdfMergeException("INACCESSIBLE_FILE", "A selected PDF cannot be opened.");
+            byte[] header = new byte[5];
+            if (input.read(header) != 5 || header[0] != '%' || header[1] != 'P' || header[2] != 'D' || header[3] != 'F' || header[4] != '-') {
+                throw new PdfMergeException("INVALID_PDF", "A selected file is not a valid PDF.");
+            }
+        } catch (PdfMergeException error) {
+            throw error;
+        } catch (IOException | SecurityException error) {
+            throw new PdfMergeException("INACCESSIBLE_FILE", "A selected PDF cannot be read.", error);
+        }
+        JSObject item = new JSObject();
+        item.put("id", uri.toString());
+        item.put("uri", uri.toString());
+        item.put("name", info.name);
+        item.put("size", info.size);
+        item.put("mimeType", "application/pdf");
+        item.put("available", true);
+        return item;
+    }
+
+    private List<Uri> collectUris(Intent data) {
+        Set<String> unique = new LinkedHashSet<>();
+        List<Uri> result = new ArrayList<>();
+        ClipData clip = data.getClipData();
+        if (clip != null) {
+            for (int index = 0; index < clip.getItemCount(); index += 1) {
+                Uri uri = clip.getItemAt(index).getUri();
+                if (uri != null && unique.add(uri.toString())) result.add(uri);
+            }
+        } else if (data.getData() != null) {
+            result.add(data.getData());
+        }
+        return result;
+    }
+
+    private int countDuplicates(Intent data) {
+        ClipData clip = data.getClipData();
+        if (clip == null) return 0;
+        Set<String> unique = new LinkedHashSet<>();
+        for (int index = 0; index < clip.getItemCount(); index += 1) {
+            Uri uri = clip.getItemAt(index).getUri();
+            if (uri != null) unique.add(uri.toString());
+        }
+        return clip.getItemCount() - unique.size();
+    }
+
+    private List<Uri> parseContentUris(JSArray values) throws PdfMergeException {
+        if (values == null) throw new PdfMergeException("NO_FILES", "No PDF files were provided.");
+        List<Uri> uris = new ArrayList<>();
+        Set<String> unique = new LinkedHashSet<>();
+        try {
+            for (int index = 0; index < values.length(); index += 1) {
+                Uri uri = requireContentUri(values.getString(index));
+                if (unique.add(uri.toString())) uris.add(uri);
+            }
+        } catch (JSONException error) {
+            throw new PdfMergeException("INVALID_URI", "A selected PDF reference is invalid.", error);
+        }
+        return uris;
+    }
+
+    private Uri requireContentUri(String value) throws PdfMergeException {
+        if (value == null || value.trim().isEmpty()) throw new PdfMergeException("INVALID_URI", "The PDF reference is missing.");
+        Uri uri = Uri.parse(value);
+        if (!ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())) {
+            throw new PdfMergeException("INVALID_URI", "Only secure Android document references are supported.");
+        }
+        return uri;
+    }
+
+    private void ensureDocumentAvailable(Uri uri) throws PdfMergeException {
+        try (android.content.res.AssetFileDescriptor descriptor = getContext().getContentResolver().openAssetFileDescriptor(uri, "r")) {
+            if (descriptor == null) throw new PdfMergeException("INACCESSIBLE_FILE", "The saved PDF is no longer available.");
+        } catch (PdfMergeException error) {
+            throw error;
+        } catch (IOException | SecurityException error) {
+            throw new PdfMergeException("INACCESSIBLE_FILE", "The saved PDF is no longer available.", error);
+        }
+    }
+
+    private DocumentInfo queryDocument(Uri uri) {
+        String fallbackName = "document.pdf";
+        long size = -1;
+        try (Cursor cursor = getContext().getContentResolver().query(uri, new String[] { OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE }, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (nameIndex >= 0 && !cursor.isNull(nameIndex)) fallbackName = cursor.getString(nameIndex);
+                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) size = cursor.getLong(sizeIndex);
+            }
+        } catch (RuntimeException ignored) {
+            // Availability is verified by opening the stream, not metadata lookup.
+        }
+        return new DocumentInfo(fallbackName, size);
+    }
+
+    private String queryName(Uri uri) {
+        return queryDocument(uri).name;
+    }
+
+    private void takeReadPermission(Uri uri, int flags) {
+        try {
+            getContext().getContentResolver().takePersistableUriPermission(uri, flags & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (RuntimeException ignored) {
+            // Some providers grant session access but do not support persistable grants.
+        }
+    }
+
+    private void takeWritePermission(Uri uri, int flags) {
+        try {
+            getContext().getContentResolver().takePersistableUriPermission(uri, flags);
+        } catch (RuntimeException ignored) {
+            // The newly created document remains available for the current session.
+        }
+    }
+
+    private File mergeCacheDirectory() {
+        File directory = new File(getContext().getCacheDir(), "pdf-merge");
+        if (!directory.exists()) directory.mkdirs();
+        return directory;
+    }
+
+    private void cleanupOldMergeFiles() {
+        File[] files = mergeCacheDirectory().listFiles();
+        if (files == null) return;
+        long cutoff = System.currentTimeMillis() - (24L * 60L * 60L * 1000L);
+        for (File file : files) {
+            if (file.lastModified() < cutoff) deleteQuietly(file);
+        }
+    }
+
+    private void notifyPhase(String phase, String message) {
+        JSObject progress = new JSObject();
+        progress.put("phase", phase);
+        progress.put("message", message);
+        notifyListeners("mergeProgress", progress);
+    }
+
+    private void finishFailedMerge(PluginCall call, File tempFile, PdfMergeException error) {
+        deleteQuietly(tempFile);
+        cancelRequested.set(false);
+        mergeRunning.set(false);
+        call.reject(error.getMessage(), error.getCode());
+    }
+
+    private static void deleteQuietly(File file) {
+        if (file != null && file.exists()) file.delete();
+    }
+
+    private static String safeOutputName(String value) {
+        String normalized = value == null ? "merged-pdf.pdf" : value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "-").trim();
+        if (normalized.isEmpty()) normalized = "merged-pdf.pdf";
+        if (!normalized.toLowerCase(Locale.ROOT).endsWith(".pdf")) normalized += ".pdf";
+        return normalized.length() > 80 ? normalized.substring(0, 76) + ".pdf" : normalized;
+    }
+
+    private static boolean isOutOfSpace(Throwable error) {
+        Throwable cursor = error;
+        while (cursor != null) {
+            String message = cursor.getMessage();
+            if (message != null) {
+                String normalizedMessage = message.toLowerCase(Locale.ROOT);
+                if (normalizedMessage.contains("no space left") || normalizedMessage.contains("enospc")) return true;
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
+    }
+
+    private static final class DocumentInfo {
+        final String name;
+        final long size;
+
+        DocumentInfo(String name, long size) {
+            this.name = name;
+            this.size = size;
+        }
+    }
+}

@@ -6,7 +6,9 @@ This repository is the dedicated mobile app. The existing YOYOPDF web applicatio
 
 ## Current status
 
-Phase 1 foundation: lightweight Vite/JavaScript UI, Capacitor Android host, four-tab mobile shell, searchable tool catalog, empty file states, and persisted System/Light/Dark themes. PDF operations are visibly marked as planned and are not implemented yet.
+Phase 2 includes one real Android workflow: select two or more PDFs, reorder them, merge entirely on-device, choose a save location, open/share the result, and retain metadata-only recents. All other PDF tools remain planned.
+
+Merge PDF uses a custom Capacitor Android bridge with Apache-licensed PdfBox-Android. Android document providers are accessed through secure `content://` references; PDF bytes never enter JavaScript state or localStorage and are never uploaded.
 
 ## Start locally
 
@@ -27,3 +29,15 @@ npm run cap:sync
 To open the native project, install Android Studio and its SDK, then run `npm run android:open`.
 
 See [AGENTS.md](./AGENTS.md) for architecture, privacy rules, development conventions, and phase guidance.
+
+## Merge PDF verification
+
+The JavaScript suite covers selection, ordering, validation, output names, errors, loader states, and recent metadata. The Android instrumentation test creates and merges PDFs on-device and verifies page order.
+
+```bash
+cd android
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+./gradlew :app:connectedDebugAndroidTest # emulator/device required
+```
+
+This is not yet a production release. Password entry, iOS native support, a broad real-world PDF corpus, and a full Android provider/device matrix remain future hardening work.
