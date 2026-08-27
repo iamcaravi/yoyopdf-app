@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">YOYOPDF</string>
+    <string name="title_activity_main">YOYOPDF</string>
+    <string name="package_name">com.yoyopdf.app</string>
+    <string name="custom_url_scheme">com.yoyopdf.app</string>
+</resources>

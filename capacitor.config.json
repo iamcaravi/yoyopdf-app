@@ -1,0 +1,9 @@
+{
+  "appId": "com.yoyopdf.app",
+  "appName": "YOYOPDF",
+  "webDir": "mobile/dist",
+  "bundledWebRuntime": false,
+  "android": {
+    "allowMixedContent": false
+  }
+}

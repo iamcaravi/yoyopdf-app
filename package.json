@@ -1,0 +1,28 @@
+{
+  "name": "yoyopdf-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Privacy-first YOYOPDF mobile application",
+  "scripts": {
+    "dev": "vite mobile",
+    "build": "vite build mobile --base ./ --outDir dist",
+    "preview": "vite preview mobile",
+    "test": "node --test",
+    "check": "npm run test && npm run build",
+    "cap:sync": "npm run build && cap sync",
+    "android:open": "npm run cap:sync && cap open android",
+    "android:run": "npm run cap:sync && cap run android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3",
+    "vite": "^7.1.3"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}
