@@ -37,24 +37,27 @@ public class PdfMergeEngineInstrumentedTest {
     public void mergePreservesSourceAndPageOrder() throws Exception {
         File first = createPdf("first.pdf", 200f, 210f);
         File second = createPdf("second.pdf", 300f);
+        File third = createPdf("third.pdf", 310f, 320f);
         File output = new File(directory, "merged.pdf");
         List<Integer> completed = new ArrayList<>();
 
         int pageCount = new PdfMergeEngine().merge(
             context,
-            Arrays.asList(Uri.fromFile(first), Uri.fromFile(second)),
+            Arrays.asList(Uri.fromFile(first), Uri.fromFile(second), Uri.fromFile(third)),
             output,
             new AtomicBoolean(false),
             (current, total) -> completed.add(current)
         );
 
-        assertEquals(3, pageCount);
-        assertEquals(Arrays.asList(1, 2), completed);
+        assertEquals(5, pageCount);
+        assertEquals(Arrays.asList(1, 2, 3), completed);
         try (PDDocument merged = PDDocument.load(output)) {
-            assertEquals(3, merged.getNumberOfPages());
+            assertEquals(5, merged.getNumberOfPages());
             assertEquals(200f, merged.getPage(0).getMediaBox().getWidth(), 0.01f);
             assertEquals(210f, merged.getPage(1).getMediaBox().getWidth(), 0.01f);
             assertEquals(300f, merged.getPage(2).getMediaBox().getWidth(), 0.01f);
+            assertEquals(310f, merged.getPage(3).getMediaBox().getWidth(), 0.01f);
+            assertEquals(320f, merged.getPage(4).getMediaBox().getWidth(), 0.01f);
         }
     }
 

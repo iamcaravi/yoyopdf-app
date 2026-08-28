@@ -76,7 +76,7 @@ public final class PdfMergeEngine {
 
             ensureNotCancelled(cancelRequested);
             output.save(outputStream);
-            outputStream.getFD().sync();
+            outputStream.flush();
             return totalPages;
         } catch (PdfMergeException error) {
             throw error;
