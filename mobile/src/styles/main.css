@@ -133,7 +133,10 @@ a { color: var(--brand-dark); text-underline-offset: 3px; }
 .button--wide { width: 100%; }
 .button:disabled, .mini-button:disabled { opacity: .42; cursor: not-allowed; }
 .merge-drop-empty { padding: 35px 10px 22px; text-align: center; }
-.merge-drop-empty > div { width: 52px; height: 52px; display: grid; place-items: center; margin: 0 auto 12px; color: var(--brand); background: var(--brand-soft); border-radius: 17px; font-size: 27px; }
+.merge-drop-empty__add { width: 52px; height: 52px; display: grid; place-items: center; margin: 0 auto 12px; padding: 0; color: var(--brand); background: var(--brand-soft); border: 0; border-radius: 17px; font-size: 27px; cursor: pointer; }
+.merge-drop-empty__add:active { transform: scale(.96); }
+.merge-drop-empty__add:focus-visible { outline: 3px solid color-mix(in srgb, var(--brand) 28%, transparent); outline-offset: 2px; }
+.merge-drop-empty__add:disabled { opacity: .42; cursor: not-allowed; }
 .merge-drop-empty h3 { margin: 0; font-size: 16px; }
 .merge-drop-empty p { max-width: 330px; margin: 7px auto 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .merge-files { padding-top: 13px; }

@@ -31,7 +31,7 @@ export function renderMergeScreen(state) {
       <div class="merge-panel__heading"><div><span>${count} ${count === 1 ? 'PDF' : 'PDFs'}</span><h2 id="selected-title">Selected files</h2></div>
         <button class="button button--outline" type="button" data-merge-add ${state.picking ? 'disabled' : ''}>${state.picking ? 'Opening…' : '+ Add PDF'}</button>
       </div>
-      ${count ? `<ol class="merge-files">${state.files.map((file, index) => renderSelectedFile(file, index, count)).join('')}</ol>` : `<div class="merge-drop-empty"><div aria-hidden="true">＋</div><h3>Add your first PDFs</h3><p>Android’s document picker supports Downloads, Documents, device storage, and compatible providers.</p><button class="button button--primary" type="button" data-merge-add ${state.picking ? 'disabled' : ''}>Choose PDFs</button></div>`}
+      ${count ? `<ol class="merge-files">${state.files.map((file, index) => renderSelectedFile(file, index, count)).join('')}</ol>` : `<div class="merge-drop-empty"><button class="merge-drop-empty__add" type="button" data-merge-add aria-label="Choose PDFs" ${state.picking ? 'disabled' : ''}>＋</button><h3>Add your first PDFs</h3><p>Android’s document picker supports Downloads, Documents, device storage, and compatible providers.</p><button class="button button--primary" type="button" data-merge-add ${state.picking ? 'disabled' : ''}>Choose PDFs</button></div>`}
       ${count ? '<button class="clear-button" type="button" data-merge-clear>Clear all</button>' : ''}
     </section>
     <div class="merge-order-note"><strong>Order matters</strong><span>Use the arrow controls to set the exact order of the final PDF.</span></div>
