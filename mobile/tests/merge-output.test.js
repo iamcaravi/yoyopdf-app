@@ -13,6 +13,8 @@ test('output naming is sensible, bounded, and removes unsafe filename characters
 test('native error codes become actionable user messages without stack details', () => {
   assert.match(userMessageForError({ code: 'ENCRYPTED_PDF', message: 'java stack' }), /Password-protected/i);
   assert.match(userMessageForError({ code: 'INSUFFICIENT_STORAGE' }), /free storage/i);
+  assert.match(userMessageForError({ code: 'REORDER_FAILED', message: 'java stack' }), /could not be reordered/i);
+  assert.match(userMessageForError({ code: 'DELETE_FAILED', message: 'java stack' }), /could not be removed/i);
   assert.match(validationMessage('TOO_FEW_FILES'), /at least two/i);
   assert.doesNotMatch(userMessageForError({ message: 'java.lang.RuntimeException' }), /java\.lang/i);
 });

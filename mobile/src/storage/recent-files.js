@@ -7,10 +7,14 @@ export function sanitizeRecentFile(value) {
   return Object.freeze({
     id: value.uri,
     uri: value.uri,
-    name: typeof value.name === 'string' && value.name.trim() ? value.name.trim() : 'merged-pdf.pdf',
+    name: typeof value.name === 'string' && value.name.trim() ? value.name.trim() : 'document.pdf',
     size: Number.isFinite(Number(value.size)) ? Number(value.size) : -1,
     createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
-    operation: value.operation === 'merge' ? 'merge' : 'unknown',
+    operation: ['merge', 'split', 'reorder', 'delete'].includes(value.operation) ? value.operation : 'unknown',
+    deletedCount: Number.isInteger(Number(value.deletedCount)) ? Number(value.deletedCount) : 0,
+    mimeType: value.mimeType === 'application/zip' ? 'application/zip' : 'application/pdf',
+    pageCount: Number.isInteger(Number(value.pageCount)) ? Number(value.pageCount) : 0,
+    outputCount: Number.isInteger(Number(value.outputCount)) ? Number(value.outputCount) : 1,
     available: value.available !== false,
   });
 }

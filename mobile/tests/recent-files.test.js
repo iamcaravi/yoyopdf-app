@@ -34,3 +34,48 @@ test('unsafe or corrupted persisted references are ignored', () => {
   const storage = { getItem: () => JSON.stringify([{ uri: 'file:///private.pdf', name: 'bad.pdf' }, null]) };
   assert.deepEqual(loadRecentFiles(storage), []);
 });
+
+test('split PDF and ZIP outputs use the existing recent metadata store', () => {
+  const split = addRecentFile([], {
+    uri: 'content://downloads/source_split_parts.zip',
+    name: 'source_split_parts.zip',
+    size: 4096,
+    operation: 'split',
+    mimeType: 'application/zip',
+    pageCount: 8,
+    outputCount: 3,
+  });
+  assert.equal(split[0].operation, 'split');
+  assert.equal(split[0].mimeType, 'application/zip');
+  assert.equal(split[0].outputCount, 3);
+  assert.equal(split[0].pageCount, 8);
+});
+
+test('reordered PDFs use the existing recent metadata store', () => {
+  const files = addRecentFile([], {
+    uri: 'content://downloads/source_reordered.pdf',
+    name: 'source_reordered.pdf',
+    size: 3072,
+    operation: 'reorder',
+    mimeType: 'application/pdf',
+    pageCount: 5,
+  });
+  assert.equal(files[0].operation, 'reorder');
+  assert.equal(files[0].mimeType, 'application/pdf');
+  assert.equal(files[0].pageCount, 5);
+});
+
+test('page-deletion outputs use the existing recent metadata store', () => {
+  const files = addRecentFile([], {
+    uri: 'content://downloads/source_pages_removed.pdf',
+    name: 'source_pages_removed.pdf',
+    size: 2500,
+    operation: 'delete',
+    mimeType: 'application/pdf',
+    pageCount: 3,
+    deletedCount: 2,
+  });
+  assert.equal(files[0].operation, 'delete');
+  assert.equal(files[0].pageCount, 3);
+  assert.equal(files[0].deletedCount, 2);
+});

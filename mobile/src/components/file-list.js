@@ -17,8 +17,8 @@ export function renderFileList(files, compact = false) {
     });
   }
   return `<ul class="file-list">${files.map((file) => `<li class="recent-file ${file.available ? '' : 'is-unavailable'}">
-    <span class="recent-file__icon" aria-hidden="true">PDF</span>
-    <span class="recent-file__copy"><strong>${escapeHtml(file.name)}</strong><small>${formatSize(file.size)} · ${file.operation === 'merge' ? 'Merged PDF' : 'PDF'}${file.available ? '' : ' · Unavailable'}</small></span>
+    <span class="recent-file__icon" aria-hidden="true">${file.mimeType === 'application/zip' ? 'ZIP' : 'PDF'}</span>
+    <span class="recent-file__copy"><strong>${escapeHtml(file.name)}</strong><small>${formatSize(file.size)} · ${file.operation === 'merge' ? 'Merged PDF' : file.operation === 'split' ? 'Split output' : file.operation === 'reorder' ? 'Reordered PDF' : file.operation === 'delete' ? 'Pages removed' : 'PDF'}${file.available ? '' : ' · Unavailable'}</small></span>
     ${compact ? '' : `<span class="recent-file__actions">
       <button class="mini-button" type="button" data-recent-open="${escapeAttribute(file.id)}" aria-label="Open ${escapeAttribute(file.name)}" ${file.available ? '' : 'disabled'}>Open</button>
       <button class="mini-button" type="button" data-recent-share="${escapeAttribute(file.id)}" aria-label="Share ${escapeAttribute(file.name)}" ${file.available ? '' : 'disabled'}>Share</button>

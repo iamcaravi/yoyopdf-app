@@ -6,9 +6,9 @@ This repository contains the dedicated YOYOPDF mobile application. Android is th
 
 ## Current implementation phase
 
-Phase 2 implements one complete operation: Merge PDF on Android. It includes Storage Access Framework selection and saving, native on-device merging, ordered selection state, a reusable processing overlay, result/open/share actions, and metadata-only recent files. Merge PDF is `available`; every other PDF tool remains `planned`.
+Merge PDF, Split PDF, Reorder Pages, and Delete Pages are available on Android. Delete Pages selects unwanted thumbnails and always preserves at least one page. Reorder Pages preserves every page and supports touch dragging plus accessible move controls. Split PDF supports custom non-overlapping ranges, fixed pages-per-file groups, and selected pages combined or emitted separately. Multiple split outputs are bundled into a ZIP. All workflows use Storage Access Framework selection/saving, native on-device processing, the reusable processing overlay, result/open/share actions, and metadata-only recent files.
 
-The next phase should harden Merge PDF with a wider compatibility/performance corpus and device coverage before selecting another single tool vertical slice.
+The next phase should harden Merge and Split PDF with a wider compatibility/performance corpus and device/provider coverage before selecting another single tool vertical slice.
 
 ## Architecture decisions
 
@@ -22,7 +22,7 @@ The next phase should harden Merge PDF with a wider compatibility/performance co
 
 ## Phase 2 PDF engine decision
 
-- Android Merge PDF uses `com.tom-roush:pdfbox-android:2.0.27.0`, the Apache-2.0 Android port of Apache PDFBox.
+- Android PDF operations use `com.tom-roush:pdfbox-android:2.0.27.0`, the Apache-2.0 Android port of Apache PDFBox.
 - The existing Eazypdfv2 web implementation was inspected. It uses `pdf-lib` 1.17.1 and reads each browser `File` into an `ArrayBuffer`, copies pages into a second in-memory document, then saves another byte array. That remains appropriate for the web app but is not reused in the Android WebView because it duplicates large document data in JavaScript memory and does not natively handle Android `content://` references.
 - PdfBox-Android was selected because it can consume Android content streams, use disk-backed PDFBox scratch storage, preserve vector PDF pages, classify password/corruption failures, and run off the UI thread under a permissive license.
 - iText was not selected because its AGPL/commercial licensing is not appropriate without a separate product/legal decision. Android `PdfRenderer` cannot write or merge PDFs. A WebView `pdf-lib`/WASM path would increase memory copying and complicate native storage integration.
@@ -32,6 +32,10 @@ The next phase should harden Merge PDF with a wider compatibility/performance co
 - `android/app/src/main/java/com/yoyopdf/app/pdf/PdfDocumentsPlugin.java` owns picker, save, availability, open, and share intents.
 - Selection uses `ACTION_OPEN_DOCUMENT`, `application/pdf`, multiple selection, persisted read grants where providers support them, and ordered `content://` references. Do not resolve or depend on raw filesystem paths.
 - Merging runs on a single background executor. `PdfMergeEngine` opens one source at a time, uses PDFBox temp-file memory settings, appends in the UI-specified order, and writes a private cache result.
+- Splitting runs on the same background executor. `PdfSplitEngine` opens the source once, imports requested pages in order into private cache outputs, and creates a ZIP with `java.util.zip` when more than one PDF is produced.
+- Reordering runs on the same background executor. `PdfReorderEngine` validates a complete, unique page permutation and imports every page into a new private cache PDF in the requested order.
+- Page deletion runs on the same background executor. `PdfDeleteEngine` validates a unique, non-empty deletion set, refuses to delete all pages, and imports every retained page in source order.
+- Split page previews are loaded lazily for visible pages through Android `PdfRenderer`; preview failures never block native PDFBox splitting.
 - Only after the merge succeeds does `ACTION_CREATE_DOCUMENT` ask the user where to save `merged-pdf.pdf`. The provider handles collision/overwrite confirmation. The private temporary file is removed after success, cancellation, or failure; stale crash remnants older than 24 hours are cleaned on plugin load.
 - Open and Share use the saved content URI with temporary read permission. Never expose raw paths to other apps.
 - Picker and output providers may omit file size. UI must display “Size unavailable” rather than treating it as zero.
@@ -41,7 +45,7 @@ The next phase should harden Merge PDF with a wider compatibility/performance co
 - `mobile/src/components/processing-overlay.js` is the reusable cross-tool processing UI. It supports indeterminate work, real completed/total progress, success, failure, and cooperative cancellation.
 - Never manufacture percentages. Merge progress is measured by completed source files; final PDF saving remains indeterminate.
 - Cancellation is checked between input documents and before save. PDFBox cannot interrupt a single document parse or final serialization safely.
-- `mobile/src/storage/recent-files.js` persists metadata only: secure URI, filename, size, timestamp, operation, and availability. PDF bytes never enter localStorage.
+- `mobile/src/storage/recent-files.js` persists metadata only: secure URI, filename, MIME type, size, timestamp, operation, output/page counts, and availability. PDF bytes never enter localStorage.
 - Recent references are rechecked through the native plugin. Missing or revoked documents become unavailable without crashing, and removing a recent item removes metadata only—not the saved PDF.
 
 ## Source structure
@@ -98,12 +102,16 @@ android/         generated Capacitor Android project
 - Do not implement every PDF tool at once. Build and validate one vertical slice at a time.
 - Do not claim production readiness until release signing, device coverage, accessibility, privacy review, and store requirements are complete.
 - Preserve generated Android files required by Capacitor; do not hand-edit generated web assets in `mobile/dist/`.
-- Merge PDF currently requires Android. Keep the JavaScript/native adapter boundary portable so a future iOS implementation can provide the same contract.
+- Implemented PDF tools currently require Android. Keep the JavaScript/native adapter boundary portable so a future iOS implementation can provide the same contracts.
 
 ## Testing approach and known limitations
 
-- Node tests cover ordered selection, duplicates, validation, all reorder directions, removal, output names, error mapping, recent metadata, catalog status, and real-versus-indeterminate loader behavior.
+- Node tests cover merge ordering and validation, split ranges/fixed groups/page selection/output planning, error mapping, recent metadata, catalog status, and real-versus-indeterminate loader behavior.
 - `PdfMergeEngineInstrumentedTest` creates small PDFs on-device, merges them, and verifies page count and source/page order without committing binary fixtures.
+- `PdfSplitEngineInstrumentedTest` creates small PDFs on-device and verifies single-page extraction, first/middle/last ranges, multiple ranges, fixed grouping, invalid input, progress, PDF contents, and ZIP contents without binary fixtures.
+- `PdfReorderEngineInstrumentedTest` creates small PDFs on-device and verifies identity, reverse, arbitrary, invalid, and single-page orders without binary fixtures.
+- `PdfDeleteEngineInstrumentedTest` creates small PDFs on-device and verifies first, middle, last, contiguous/non-contiguous, invalid, single-page, and two-page deletion cases without binary fixtures.
+- Size-targeted splitting is deliberately omitted because PDF serialization and shared resources make a strict target size unreliable without iterative rewriting.
 - Build the app test APK with `gradlew :app:assembleDebugAndroidTest`; run it with `gradlew :app:connectedDebugAndroidTest` when an emulator or device is attached.
 - Password-protected PDFs are rejected with a user-facing message; password entry is not implemented.
 - Cancellation is cooperative between files, not during a single large PDF parse or final save.
